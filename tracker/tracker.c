@@ -45,6 +45,7 @@
 #include "led.h"
 #include "bmp085.h"
 #include "aprs.h"
+#include "lora.h"
 
 struct TConfig Config;
 
@@ -53,7 +54,7 @@ struct TConfig Config;
 #define UBLOX_ENABLE	2
 
 FILE *ImageFP;
-int Records, FileNumber;
+int Records;
 struct termios options;
 char *SSDVFolder="/home/pi/pits/tracker/download";
  
@@ -64,7 +65,7 @@ void BuildSentence(char *TxLine, int SentenceCounter, struct TGPS *GPS)
     unsigned int CRC, xPolynomial;
 	char TimeBuffer1[12], TimeBuffer2[10], ExtraFields1[20], ExtraFields2[20];
 	
-	sprintf(TimeBuffer1, "%06.0f", GPS->Time);
+	sprintf(TimeBuffer1, "%06ld", GPS->Time);
 	TimeBuffer2[0] = TimeBuffer1[0];
 	TimeBuffer2[1] = TimeBuffer1[1];
 	TimeBuffer2[2] = ':';
@@ -80,7 +81,7 @@ void BuildSentence(char *TxLine, int SentenceCounter, struct TGPS *GPS)
 	
 	if (NewBoard())
 	{
-		sprintf(ExtraFields1, ",%.0f", GPS->BoardCurrent * 1000);
+		sprintf(ExtraFields1, ",%u", GPS->BoardCurrent);
 	}
 	
 	if (Config.EnableBMP085)
@@ -89,7 +90,7 @@ void BuildSentence(char *TxLine, int SentenceCounter, struct TGPS *GPS)
 	}
 	
     sprintf(TxLine, "$$%s,%d,%s,%7.5lf,%7.5lf,%05.5u,%d,%d,%d,%3.1f,%3.1f%s",
-            Config.PayloadID,
+            Config.Channels[RTTY_CHANNEL].PayloadID,
             SentenceCounter,
 			TimeBuffer2,
             GPS->Latitude,
@@ -128,7 +129,7 @@ void BuildSentence(char *TxLine, int SentenceCounter, struct TGPS *GPS)
 	TxLine[Count++] = '\n';  
 	TxLine[Count++] = '\0';  
 
-    printf("%s", TxLine);
+    printf("RTTY: %s", TxLine);
 }
 
 
@@ -144,7 +145,7 @@ void ReadString(FILE *fp, char *keyword, char *Result, int Length, int NeedValue
 		line[strcspn(line, "\r")] = '\0';			// Ignore any CR (in case someone has edited the file from Windows with notepad)
 		
 		token = strtok(line, "=");
-		if (strcmp(keyword, token) == 0)
+		if (strcasecmp(keyword, token) == 0)
 		{
 			value = strtok(NULL, "\n");
 			strcpy(Result, value);
@@ -159,22 +160,36 @@ void ReadString(FILE *fp, char *keyword, char *Result, int Length, int NeedValue
 	}
 }
 
-int ReadInteger(FILE *fp, char *keyword, int NeedValue)
+int ReadInteger(FILE *fp, char *keyword, int NeedValue, int DefaultValue)
 {
-	char Temp[32];
+	char Temp[64];
 
 	ReadString(fp, keyword, Temp, sizeof(Temp), NeedValue);
 
-	return atoi(Temp);
+	if (Temp[0])
+	{
+		return atoi(Temp);
+	}
+	
+	return DefaultValue;
 }
 
-int ReadBoolean(FILE *fp, char *keyword, int NeedValue)
+int ReadBoolean(FILE *fp, char *keyword, int NeedValue, int *Result)
 {
 	char Temp[32];
 
 	ReadString(fp, keyword, Temp, sizeof(Temp), NeedValue);
 
-	return (*Temp == '1') || (*Temp == 'Y') || (*Temp == 'y');
+	if (*Temp)
+	{
+		*Result = (*Temp == '1') || (*Temp == 'Y') || (*Temp == 'y') || (*Temp == 't') || (*Temp == 'T');
+	}
+	else
+	{
+		*Result = 0;
+	}
+	
+	return *Temp;
 }
 
 int ReadBooleanFromString(FILE *fp, char *keyword, char *searchword)
@@ -204,8 +219,10 @@ speed_t BaudToSpeed(int baud)
 
 void LoadConfigFile(struct TConfig *Config)
 {
+	const char *LoRaModes[5] = {"slow", "SSDV", "repeater", "turbo", "TurboX"};
 	FILE *fp;
-	int BaudRate;
+	int BaudRate, Channel;
+	char Keyword[64];
 	char *filename = "/boot/pisky.txt";
 
 	if ((fp = fopen(filename, "r")) == NULL)
@@ -214,12 +231,12 @@ void LoadConfigFile(struct TConfig *Config)
 		exit(1);
 	}
 
-	ReadString(fp, "payload", Config->PayloadID, sizeof(Config->PayloadID), 1);
-	printf ("Payload ID = '%s'\n", Config->PayloadID);
+	ReadString(fp, "payload", Config->Channels[RTTY_CHANNEL].PayloadID, sizeof(Config->Channels[RTTY_CHANNEL].PayloadID), 1);
+	printf ("RTTY Payload ID = '%s'\n", Config->Channels[RTTY_CHANNEL].PayloadID);
 
 	ReadString(fp, "frequency", Config->Frequency, sizeof(Config->Frequency), 0);
 
-	Config->DisableMonitor = ReadBoolean(fp, "disable_monitor", 0);
+	ReadBoolean(fp, "disable_monitor", 0, &(Config->DisableMonitor));
 	if (Config->DisableMonitor)
 	{
 		printf("HDMI/Composite outputs will be disabled\n");
@@ -231,13 +248,13 @@ void LoadConfigFile(struct TConfig *Config)
 	Config->EnableTelemetryLogging = ReadBooleanFromString(fp, "logging", "Telemetry");
 	if (Config->EnableTelemetryLogging) printf("Telemetry Logging enabled\n");
 	
-	Config->EnableBMP085 = ReadBoolean(fp, "enable_bmp085", 0);
+	ReadBoolean(fp, "enable_bmp085", 0, &(Config->EnableBMP085));
 	if (Config->EnableBMP085)
 	{
 		printf("BMP085 Enabled\n");
 	}
 
-	BaudRate = ReadInteger(fp, "baud", 1);
+	BaudRate = ReadInteger(fp, "baud", 1, 300);
 	Config->TxSpeed = BaudToSpeed(BaudRate);
 	if (Config->TxSpeed == B0)
 	{
@@ -246,46 +263,261 @@ void LoadConfigFile(struct TConfig *Config)
 	}
 	printf ("Radio baud rate = %d\n", BaudRate);
 
-	Config->Camera = ReadBoolean(fp, "camera", 0);
+	ReadBoolean(fp, "camera", 0, &(Config->Camera));
 	printf ("Camera %s\n", Config->Camera ? "Enabled" : "Disabled");
 	if (Config->Camera)
 	{
-		Config->high = ReadInteger(fp, "high", 0);
+		Config->high = ReadInteger(fp, "high", 0, 0);
 		printf ("Image size changes at %dm\n", Config->high);
 	
-		Config->low_width = ReadInteger(fp, "low_width", 0);
-		Config->low_height = ReadInteger(fp, "low_height", 0);
+		Config->low_width = ReadInteger(fp, "low_width", 0, 0);
+		Config->low_height = ReadInteger(fp, "low_height", 0, 0);
 		printf ("Low image size %d x %d pixels\n", Config->low_width, Config->low_height);
 	
-		Config->high_width = ReadInteger(fp, "high_width", 0);
-		Config->high_height = ReadInteger(fp, "high_height", 0);
+		Config->high_width = ReadInteger(fp, "high_width", 0, 0);
+		Config->high_height = ReadInteger(fp, "high_height", 0, 0);
 		printf ("High image size %d x %d pixels\n", Config->high_width, Config->high_height);
 
-		Config->image_packets = ReadInteger(fp, "image_packets", 0);
+		Config->image_packets = ReadInteger(fp, "image_packets", 0, 0);
 		printf ("1 Telemetry packet every %d image packets\n", Config->image_packets);
 	}
 	
 	// I2C overrides.  Only needed for users own boards, or for some of our prototypes
-	if (ReadInteger(fp, "SDA", 0))
+	if (ReadInteger(fp, "SDA", 0, 0))
 	{
-		Config->SDA = ReadInteger(fp, "SDA", 0);
+		Config->SDA = ReadInteger(fp, "SDA", 0, 0);
 		printf ("I2C SDA overridden to %d\n", Config->SDA);
 	}
 
-	if (ReadInteger(fp, "SCL", 0))
+	if (ReadInteger(fp, "SCL", 0, 0))
 	{
-		Config->SCL = ReadInteger(fp, "SCL", 0);
+		Config->SCL = ReadInteger(fp, "SCL", 0, 0);
 		printf ("I2C SCL overridden to %d\n", Config->SCL);
 	}
 	
 	// APRS settings
 	ReadString(fp, "APRS_Callsign", Config->APRS_Callsign, sizeof(Config->APRS_Callsign), 0);
-	Config->APRS_ID = ReadInteger(fp, "APRS_ID", 0);
-	Config->APRS_Period = ReadInteger(fp, "APRS_Period", 0);
+	Config->APRS_ID = ReadInteger(fp, "APRS_ID", 0, 0);
+	Config->APRS_Period = ReadInteger(fp, "APRS_Period", 0, 0);
 	if (*(Config->APRS_Callsign) && Config->APRS_ID && Config->APRS_Period)
 	{
 		printf("APRS enabled for callsign %s:%d every %d minute%s\n", Config->APRS_Callsign, Config->APRS_ID, Config->APRS_Period, Config->APRS_Period > 1 ? "s" : "");
 	}
+	
+	// LORA
+	if (NewBoard())
+	{
+		// For dual card
+		Config->LoRaDevices[0].DIO0 = 31;
+		Config->LoRaDevices[0].DIO5 = 26;
+
+		Config->LoRaDevices[1].DIO0 = 6;
+		Config->LoRaDevices[1].DIO5 = 5;
+	}
+	else
+	{
+		Config->LoRaDevices[0].DIO0 = 6;
+		Config->LoRaDevices[0].DIO5 = 5;
+		
+		Config->LoRaDevices[0].InUse = 1;
+		Config->LoRaDevices[1].InUse = 0;
+	}
+	/*
+	Config->LoRaDevices[0].DIO0 =  6;
+	Config->LoRaDevices[0].DIO5 =  5;
+	Config->LoRaDevices[0].InUse = 0;
+
+	Config->LoRaDevices[1].DIO0 =  3;
+	Config->LoRaDevices[1].DIO5 =  2;
+	Config->LoRaDevices[1].InUse = 0;
+	*/
+
+	for (Channel=0; Channel<=1; Channel++)
+	{
+		int Temp;
+		char TempString[64];
+		
+		strcpy(Config->LoRaDevices[Channel].LastCommand, "None");
+		
+		Config->LoRaDevices[Channel].Frequency[0] = '\0';
+		sprintf(Keyword, "LORA_Frequency_%d", Channel);
+		ReadString(fp, Keyword, Config->LoRaDevices[Channel].Frequency, sizeof(Config->LoRaDevices[Channel].Frequency), 0);
+		if (Config->LoRaDevices[Channel].Frequency[0])
+		{
+			printf("LoRa Channel %d frequency set to %s\n", Channel, Config->LoRaDevices[Channel].Frequency);
+			Config->LoRaDevices[Channel].InUse = 1;
+
+			sprintf(Keyword, "LORA_Payload_%d", Channel);
+			ReadString(fp, Keyword, Config->Channels[LORA_CHANNEL+Channel].PayloadID, sizeof(Config->Channels[LORA_CHANNEL+Channel].PayloadID), 1);
+			printf ("LORA Channel %d Payload ID = '%s'\n", Channel, Config->Channels[LORA_CHANNEL+Channel].PayloadID);
+			
+			sprintf(Keyword, "LORA_Mode_%d", Channel);
+			Config->LoRaDevices[Channel].SpeedMode = ReadInteger(fp, Keyword, 0, 0);
+			printf("LoRa Channel %d %s mode\n", Channel, LoRaModes[Config->LoRaDevices[Channel].SpeedMode]);
+			
+			sprintf(Keyword, "LORA_Cycle_%d", Channel);
+			Config->LoRaDevices[Channel].CycleTime = ReadInteger(fp, Keyword, 0, 0);			
+			if (Config->LoRaDevices[Channel].CycleTime > 0)
+			{
+				printf("LoRa Channel %d cycle time %d\n", Channel, Config->LoRaDevices[Channel].CycleTime);
+
+				sprintf(Keyword, "LORA_Slot_%d", Channel);
+				Config->LoRaDevices[Channel].Slot = ReadInteger(fp, Keyword, 0, 0);
+				printf("LoRa Channel %d Slot %d\n", Channel, Config->LoRaDevices[Channel].Slot);
+
+				sprintf(Keyword, "LORA_Repeat_%d", Channel);
+				Config->LoRaDevices[Channel].RepeatSlot = ReadInteger(fp, Keyword, 0, 0);			
+				printf("LoRa Channel %d Repeat Slot %d\n", Channel, Config->LoRaDevices[Channel].RepeatSlot);
+
+				sprintf(Keyword, "LORA_Uplink_%d", Channel);
+				Config->LoRaDevices[Channel].UplinkSlot = ReadInteger(fp, Keyword, 0, 0);			
+				printf("LoRa Channel %d Uplink Slot %d\n", Channel, Config->LoRaDevices[Channel].UplinkSlot);
+
+				sprintf(Keyword, "LORA_Binary_%d", Channel);
+				ReadBoolean(fp, Keyword, 0, &(Config->LoRaDevices[Channel].Binary));			
+				printf("LoRa Channel %d Set To %s\n", Channel, Config->LoRaDevices[Channel].Binary ? "Binary" : "ASCII");
+			}
+
+			if (Config->LoRaDevices[Channel].SpeedMode == 4)
+			{
+				// Testing
+				Config->LoRaDevices[Channel].ImplicitOrExplicit = IMPLICIT_MODE;
+				Config->LoRaDevices[Channel].ErrorCoding = ERROR_CODING_4_5;
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_250K;
+				Config->LoRaDevices[Channel].SpreadingFactor = SPREADING_6;
+				Config->LoRaDevices[Channel].LowDataRateOptimize = 0;		
+			}
+			else if (Config->LoRaDevices[Channel].SpeedMode == 3)
+			{
+				// Normal mode for high speed images in 868MHz band
+				Config->LoRaDevices[Channel].ImplicitOrExplicit = EXPLICIT_MODE;
+				Config->LoRaDevices[Channel].ErrorCoding = ERROR_CODING_4_6;
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_250K;
+				Config->LoRaDevices[Channel].SpreadingFactor = SPREADING_7;
+				Config->LoRaDevices[Channel].LowDataRateOptimize = 0;		
+			}
+			else if (Config->LoRaDevices[Channel].SpeedMode == 2)
+			{
+				// Normal mode for repeater network
+				// 72 byte packet is approx 1.5 seconds so needs at least 30 seconds cycle time if repeating one balloon
+				Config->LoRaDevices[Channel].ImplicitOrExplicit = EXPLICIT_MODE;
+				Config->LoRaDevices[Channel].ErrorCoding = ERROR_CODING_4_8;
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_62K5;
+				Config->LoRaDevices[Channel].SpreadingFactor = SPREADING_8;
+				Config->LoRaDevices[Channel].LowDataRateOptimize = 0;		
+			}
+			else if (Config->LoRaDevices[Channel].SpeedMode == 1)
+			{
+				// Normal mode for SSDV
+				Config->LoRaDevices[Channel].ImplicitOrExplicit = IMPLICIT_MODE;
+				Config->LoRaDevices[Channel].ErrorCoding = ERROR_CODING_4_5;
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_20K8;
+				Config->LoRaDevices[Channel].SpreadingFactor = SPREADING_6;
+				Config->LoRaDevices[Channel].LowDataRateOptimize = 0;		
+			}
+			else
+			{
+				// Normal mode for telemetry
+				Config->LoRaDevices[Channel].ImplicitOrExplicit = EXPLICIT_MODE;
+				Config->LoRaDevices[Channel].ErrorCoding = ERROR_CODING_4_8;
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_20K8;
+				Config->LoRaDevices[Channel].SpreadingFactor = SPREADING_11;
+				Config->LoRaDevices[Channel].LowDataRateOptimize = 0x08;		
+			}
+			
+			sprintf(Keyword, "LORA_SF_%d", Channel);
+			Temp = ReadInteger(fp, Keyword, 0, 0);
+			if ((Temp >= 6) && (Temp <= 12))
+			{
+				Config->LoRaDevices[Channel].SpreadingFactor = Temp << 4;
+				printf("LoRa Setting SF=%d\n", Temp);
+			}
+
+			sprintf(Keyword, "LORA_Bandwidth_%d", Channel);
+			ReadString(fp, Keyword, TempString, sizeof(TempString), 0);
+			if (*TempString)
+			{
+				printf("LoRa Setting BW=%s\n", TempString);
+			}
+			if (strcmp(TempString, "7K8") == 0)
+			{
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_7K8;
+			}
+			if (strcmp(TempString, "10K4") == 0)
+			{
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_10K4;
+			}
+			if (strcmp(TempString, "15K6") == 0)
+			{
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_15K6;
+			}
+			if (strcmp(TempString, "20K8") == 0)
+			{
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_20K8;
+			}
+			if (strcmp(TempString, "31K25") == 0)
+			{
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_31K25;
+			}
+			if (strcmp(TempString, "41K7") == 0)
+			{
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_41K7;
+			}
+			if (strcmp(TempString, "62K5") == 0)
+			{
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_62K5;
+			}
+			if (strcmp(TempString, "125K") == 0)
+			{
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_125K;
+			}
+			if (strcmp(TempString, "250K") == 0)
+			{
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_250K;
+			}
+			if (strcmp(TempString, "500K") == 0)
+			{
+				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_500K;
+			}
+			
+			sprintf(Keyword, "LORA_Implicit_%d", Channel);
+			if (ReadBoolean(fp, Keyword, 0, &Temp))
+			{
+				if (Temp)
+				{
+					Config->LoRaDevices[Channel].ImplicitOrExplicit = IMPLICIT_MODE;
+				}
+			}
+			
+			sprintf(Keyword, "LORA_Coding_%d", Channel);
+			Temp = ReadInteger(fp, Keyword, 0, 0);
+			if ((Temp >= 5) && (Temp <= 8))
+			{
+				Config->LoRaDevices[Channel].ErrorCoding = (Temp-4) << 1;
+				printf("LoRa Setting Error Coding=%d\n", Temp);
+			}
+
+			sprintf(Keyword, "LORA_LowOpt_%d", Channel);
+			if (ReadBoolean(fp, Keyword, 0, &Temp))
+			{
+				if (Temp)
+				{
+					Config->LoRaDevices[Channel].LowDataRateOptimize = 0x08;
+				}
+			}
+
+			sprintf(Keyword, "LORA_Power_%d", Channel);
+			Config->LoRaDevices[Channel].Power = ReadInteger(fp, Keyword, 0, PA_MAX_UK);
+			printf("LoRa Channel %d power set to %02Xh\n", Channel, Config->LoRaDevices[Channel].Power);
+
+			Config->LoRaDevices[Channel].PayloadLength = (Config->LoRaDevices[Channel].SpeedMode == 0) ? 80 : 255;
+		}
+		else
+		{
+			Config->LoRaDevices[Channel].InUse = 0;
+		}
+	}
+	
 	
 	fclose(fp);
 }
@@ -332,7 +564,7 @@ void SetMTX2Frequency(char *FrequencyString)
 			Frequency = atof(FrequencyString);
 		}
 		
-		printf("Frequency set to %8.4fMHz\n", Frequency);
+		printf("RTTY Frequency set to %8.4fMHz\n", Frequency);
 		
 		_mtx2comp=(Frequency+0.0015)/6.5;
 		_mtx2int=_mtx2comp;
@@ -341,7 +573,7 @@ void SetMTX2Frequency(char *FrequencyString)
 		write(fd, _mtx2command, strlen(_mtx2command)); 
 
 		delayMilliseconds (100);
-		printf("MTX2 command  is %s\n", _mtx2command);
+		printf("MTX2 command is %s\n", _mtx2command);
 
 		close(fd);
 	}
@@ -456,71 +688,6 @@ void SendSentence(char *TxLine)
 	
 }
 
-int FindAndConvertImage(void)
-{
-	size_t LargestFileSize;
-	char LargestFileName[100], FileName[100], CommandLine[2000];
-	DIR *dp;
-	struct dirent *ep;
-	struct stat st;
-	int Done;
-	
-	LargestFileSize = 0;
-	Done = 0;
-	
-	dp = opendir(SSDVFolder);
-	if (dp != NULL)
-	{
-		while (ep = readdir (dp))
-		{
-			if (strstr(ep->d_name, ".jpg") != NULL)
-			{
-				sprintf(FileName, "%s/%s", SSDVFolder, ep->d_name);
-				stat(FileName, &st);
-				if (st.st_size > LargestFileSize)
-				{
-					LargestFileSize = st.st_size;
-					strcpy(LargestFileName, FileName);
-				}
-			}
-		}
-		(void) closedir (dp);
-	}
-
-	if (LargestFileSize > 0)
-	{
-		char Date[20], SavedImageFolder[100];
-		time_t now;
-		struct tm *t;
-	
-		printf("Found file %s to convert\n", LargestFileName);
-		
-		// Now convert the file
-		FileNumber++;
-		FileNumber = FileNumber & 255;
-		sprintf(CommandLine, "ssdv -e -c %s -i %d %s /home/pi/pits/tracker/snap.bin", Config.PayloadID, FileNumber, LargestFileName);
-		system(CommandLine);
-		
-		// And move those pesky image files
-		now = time(NULL);
-		t = localtime(&now);
-		strftime(Date, sizeof(Date)-1, "%d_%m_%Y", t);		
-
-		sprintf(SavedImageFolder, "%s/%s", SSDVFolder, Date);
-		if (stat(SavedImageFolder, &st) == -1)
-		{
-			mkdir(SavedImageFolder, 0777);
-		}
-		system(CommandLine);
-		sprintf(CommandLine, "mv %s/*.jpg %s", SSDVFolder, SavedImageFolder);
-		system(CommandLine);
-
-		Done = 1;
-	}
-	
-	return (LargestFileSize > 0);
-}
-
 int SendImage()
 {
     unsigned char Buffer[256];
@@ -530,7 +697,7 @@ int SendImage()
 
     if (ImageFP == NULL)
     {
-		if (FindAndConvertImage())
+		if (FindAndConvertImage(RTTY_CHANNEL, SSDVFolder))
 		{
 			ImageFP = fopen("/home/pi/pits/tracker/snap.bin", "r");
 		}
@@ -570,7 +737,7 @@ int main(void)
 	char Sentence[100], Command[100];
 	struct stat st = {0};
 	struct TGPS GPS;
-	pthread_t APRSThread, GPSThread, DS18B20Thread, ADCThread, CameraThread, BMP085Thread, LEDThread;
+	pthread_t LoRaThread, APRSThread, GPSThread, DS18B20Thread, ADCThread, CameraThread, BMP085Thread, LEDThread;
 
 	printf("\n\nRASPBERRY PI-IN-THE-SKY FLIGHT COMPUTER\n");
 	printf(    "=======================================\n\n");
@@ -614,6 +781,7 @@ int main(void)
 	GPS.BatteryVoltage = 0.0;
 	GPS.ExternalTemperature = 0.0;
 	GPS.Pressure = 0.0;
+	GPS.BoardCurrent = 0.0;
 	
 	// Set up I/O
 	if (wiringPiSetup() == -1)
@@ -671,6 +839,15 @@ int main(void)
 		}
 	}
 
+	if (Config.LoRaDevices[0].InUse || Config.LoRaDevices[1].InUse)
+	{
+		if (pthread_create(&LoRaThread, NULL, LoRaLoop, &GPS))
+		{
+			fprintf(stderr, "Error creating LoRa thread\n");
+			return 1;
+		}
+	}
+	
 	if (pthread_create(&DS18B20Thread, NULL, DS18B20Loop, &GPS))
 	{
 		fprintf(stderr, "Error creating DS18B20s thread\n");

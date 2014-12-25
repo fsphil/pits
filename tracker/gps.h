@@ -2,7 +2,8 @@
 
 struct TGPS
 {
-	float Time;
+	long Time;						// Time as read from GPS, as an integer but 12:13:14 is 121314
+	long Seconds;					// Time in seconds since midnight
 	float Longitude, Latitude;
 	unsigned int Altitude;
 	unsigned int Satellites;
@@ -12,7 +13,7 @@ struct TGPS
 	float BatteryVoltage;
 	float ExternalTemperature;
 	float Pressure;
-	float BoardCurrent;
+	unsigned int BoardCurrent;
 } GPS;
 
 

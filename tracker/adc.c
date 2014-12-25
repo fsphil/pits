@@ -1,6 +1,8 @@
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
+#include <math.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/types.h>
@@ -34,12 +36,12 @@ int AnalogRead (int chan)
 double ReadADC(int chan, double FullScale)
 {
 	int RawValue;
-    double Voltage;
+    double Result;
 
    	RawValue = AnalogRead(chan);
-	Voltage = (double)RawValue * FullScale / 1024.0;
-
-	return Voltage;
+	Result = (double)RawValue * FullScale / 1024.0;
+	
+	return Result;
 }
 
 
@@ -67,8 +69,7 @@ void *ADCLoop(void *some_void_ptr)
 		if (NewBoard())
 		{
 			BoardCurrent = ReadADC(1, 14);
-			GPS->BoardCurrent = BoardCurrent;
-			// printf("Current = %lf\n", BoardCurrent);
+			GPS->BoardCurrent = (unsigned int)(fmax(0.0, BoardCurrent * 1000.0));
 		}
 
 		sleep(10);
