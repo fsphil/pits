@@ -1,11 +1,14 @@
-tracker: tracker.o gps.o misc.o DS18B20.o adc.o snapper.o led.o bmp085.o
-	cc -o tracker tracker.o gps.o misc.o DS18B20.o adc.o snapper.o led.o bmp085.o -lm -lwiringPi -lwiringPiDev -l pthread
+tracker: tracker.o gps.o misc.o DS18B20.o adc.o snapper.o led.o bmp085.o aprs.o
+	cc -o tracker tracker.o gps.o misc.o DS18B20.o adc.o snapper.o led.o bmp085.o aprs.o -lm -lwiringPi -lwiringPiDev -l pthread
 
 tracker.o: tracker.c gps.h misc.h DS18B20.h adc.h bmp085.h
 	gcc -c tracker.c
 
 gps.o: gps.c gps.h misc.h
 	gcc -c gps.c
+
+aprs.o: aprs.c aprs.h misc.h sine_table.h
+	gcc -c aprs.c
 
 DS18B20.o: DS18B20.c DS18B20.h misc.h gps.h
 	gcc -c DS18B20.c

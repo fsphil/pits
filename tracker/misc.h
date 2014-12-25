@@ -22,6 +22,9 @@ struct TConfig
 	int LED_Warn;
 	int SDA;
 	int SCL;
+	char APRS_Callsign[16];
+	int APRS_ID;
+	int APRS_Period;
 };
 
 extern struct TConfig Config;

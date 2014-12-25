@@ -17,6 +17,7 @@
 | 12/10/14 - Modifications for PITS+ V0.7 board and B+              |
 | 11/11/14 - Modifications for PITS+ V2.0 board and A+/B+           |
 | 19/12/14 - New GPS code.  Frequency calcs.  Image filenames       |
+| 20/12/14 - Added APRS code.  ** Not yet flight tested **          |
 |                                                                   |
 \------------------------------------------------------------------*/
 
@@ -43,6 +44,7 @@
 #include "snapper.h"
 #include "led.h"
 #include "bmp085.h"
+#include "aprs.h"
 
 struct TConfig Config;
 
@@ -215,7 +217,6 @@ void LoadConfigFile(struct TConfig *Config)
 	ReadString(fp, "payload", Config->PayloadID, sizeof(Config->PayloadID), 1);
 	printf ("Payload ID = '%s'\n", Config->PayloadID);
 
-	Config->Frequency[0] = '\0';
 	ReadString(fp, "frequency", Config->Frequency, sizeof(Config->Frequency), 0);
 
 	Config->DisableMonitor = ReadBoolean(fp, "disable_monitor", 0);
@@ -264,6 +265,7 @@ void LoadConfigFile(struct TConfig *Config)
 		printf ("1 Telemetry packet every %d image packets\n", Config->image_packets);
 	}
 	
+	// I2C overrides.  Only needed for users own boards, or for some of our prototypes
 	if (ReadInteger(fp, "SDA", 0))
 	{
 		Config->SDA = ReadInteger(fp, "SDA", 0);
@@ -275,7 +277,15 @@ void LoadConfigFile(struct TConfig *Config)
 		Config->SCL = ReadInteger(fp, "SCL", 0);
 		printf ("I2C SCL overridden to %d\n", Config->SCL);
 	}
-
+	
+	// APRS settings
+	ReadString(fp, "APRS_Callsign", Config->APRS_Callsign, sizeof(Config->APRS_Callsign), 0);
+	Config->APRS_ID = ReadInteger(fp, "APRS_ID", 0);
+	Config->APRS_Period = ReadInteger(fp, "APRS_Period", 0);
+	if (*(Config->APRS_Callsign) && Config->APRS_ID && Config->APRS_Period)
+	{
+		printf("APRS enabled for callsign %s:%d every %d minute%s\n", Config->APRS_Callsign, Config->APRS_ID, Config->APRS_Period, Config->APRS_Period > 1 ? "s" : "");
+	}
 	
 	fclose(fp);
 }
@@ -560,7 +570,7 @@ int main(void)
 	char Sentence[100], Command[100];
 	struct stat st = {0};
 	struct TGPS GPS;
-	pthread_t GPSThread, DS18B20Thread, ADCThread, CameraThread, BMP085Thread, LEDThread;
+	pthread_t APRSThread, GPSThread, DS18B20Thread, ADCThread, CameraThread, BMP085Thread, LEDThread;
 
 	printf("\n\nRASPBERRY PI-IN-THE-SKY FLIGHT COMPUTER\n");
 	printf(    "=======================================\n\n");
@@ -650,6 +660,15 @@ int main(void)
 	{
 		fprintf(stderr, "Error creating GPS thread\n");
 		return 1;
+	}
+
+	if (*(Config.APRS_Callsign) && Config.APRS_ID && Config.APRS_Period)
+	{
+		if (pthread_create(&APRSThread, NULL, APRSLoop, &GPS))
+		{
+			fprintf(stderr, "Error creating APRS thread\n");
+			return 1;
+		}
 	}
 
 	if (pthread_create(&DS18B20Thread, NULL, DS18B20Loop, &GPS))

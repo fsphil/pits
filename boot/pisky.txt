@@ -1,7 +1,6 @@
 payload=PI_SKY_PLUS
 disable_monitor=N
-#frequency=80
-frequency=434.450
+frequency=434.600
 baud=300
 camera=1
 low_width=320
@@ -12,3 +11,7 @@ high_height=480
 image_packets=4
 enable_bmp085=N
 # logging=GPS,Telemetry
+
+# APRS_Callsign=your_callsign
+APRS_ID=11
+APRS_Period=1
