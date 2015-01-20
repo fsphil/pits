@@ -1,0 +1,24 @@
+#!/bin/bash
+cd /home/pi/pits/tracker
+echo Redirect audio to GPIO ...
+sudo ./pwm_switch
+
+echo Set up HX1 control ...
+gpio mode 4 output
+gpio write 4 0
+
+while [ 1 ]
+do
+	echo Testing for file
+	if [ -e aprs.wav ]
+	then
+		gpio write 4 1
+		sleep 0.5
+		aplay aprs.wav
+		sleep 0.2
+		gpio write 4 0
+		rm -f aprs.wav
+		sleep 20
+	fi
+	sleep 1
+done
