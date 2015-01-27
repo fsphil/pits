@@ -298,8 +298,8 @@ void LoadConfigFile(struct TConfig *Config)
 	// I2C overrides.  Only needed for users own boards, or for some of our prototypes
 	if (ReadInteger(fp, "SDA", 0, 0))
 	{
-		Config->SDA = ReadInteger(fp, "SDA", 0, 0);
 		printf ("I2C SDA overridden to %d\n", Config->SDA);
+		Config->SDA = ReadInteger(fp, "SDA", 0, 0);
 	}
 
 	if (ReadInteger(fp, "SCL", 0, 0))
@@ -322,11 +322,11 @@ void LoadConfigFile(struct TConfig *Config)
 	{
 		// For dual card.  These are for the second prototype (earlier one will need overrides)
 
-		Config->LoRaDevices[1].DIO0 = 6;
-		Config->LoRaDevices[1].DIO5 = 5;
+		Config->LoRaDevices[0].DIO0 = 6;
+		Config->LoRaDevices[0].DIO5 = 5;
 		
-		Config->LoRaDevices[0].DIO0 = 31;
-		Config->LoRaDevices[0].DIO5 = 26;
+		Config->LoRaDevices[1].DIO0 = 31;
+		Config->LoRaDevices[1].DIO5 = 26;
 	}
 	else
 	{
