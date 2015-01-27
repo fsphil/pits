@@ -61,9 +61,7 @@ struct TChannel
 
 struct TConfig
 {
-	char Frequency[8];
 	int DisableMonitor;
-	speed_t TxSpeed;
 	int Camera;
 	int low_width;
 	int low_height;
@@ -76,8 +74,16 @@ struct TConfig
 	int EnableTelemetryLogging;
 	int LED_OK;
 	int LED_Warn;
+	
+	// GPS Settings
 	int SDA;
 	int SCL;
+	char GPSDevice[32];
+	
+	// RTTY Settings
+	int DisableRTTY;
+	char Frequency[8];
+	speed_t TxSpeed;
 	
 	char APRS_Callsign[16];
 	int APRS_ID;

@@ -77,7 +77,6 @@ void setMode(int Channel, uint8_t newMode)
   switch (newMode) 
   {
     case RF98_MODE_TX:
-      // printf("Changing to Transmit Mode\n");
       writeRegister(Channel, REG_LNA, LNA_OFF_GAIN);  // TURN LNA OFF FOR TRANSMITT
       writeRegister(Channel, REG_PA_CONFIG, Config.LoRaDevices[Channel].Power);
       writeRegister(Channel, REG_OPMODE, newMode);
@@ -88,31 +87,27 @@ void setMode(int Channel, uint8_t newMode)
       writeRegister(Channel, REG_LNA, LNA_MAX_GAIN);  // LNA_MAX_GAIN);  // MAX GAIN FOR RECIEVE
       writeRegister(Channel, REG_OPMODE, newMode);
       currentMode = newMode; 
-      // printf("Changing to Receive Continuous Mode\n");
       break;
     case RF98_MODE_SLEEP:
       writeRegister(Channel, REG_OPMODE, newMode);
       currentMode = newMode; 
-      // printf("Changing to Sleep Mode\n"); 
       break;
     case RF98_MODE_STANDBY:
       writeRegister(Channel, REG_OPMODE, newMode);
       currentMode = newMode; 
-      // printf("Changing to Standby Mode\n");
       break;
     default: return;
   } 
   
 	if(newMode != RF98_MODE_SLEEP)
 	{
-	// Wait for mode change
-		while(digitalRead(5) == 0)
+		printf("Waiting for Mode Change\n");
+		while(digitalRead(Config.LoRaDevices[Channel].DIO5) == 0)
 		{
 		} 
+		printf("Mode change completed\n");
 	}
 	
-	// printf("Mode Change Done\n");
-  
 	return;
 }
  
@@ -144,6 +139,7 @@ void setupRFM98(int Channel)
 	if (Config.LoRaDevices[Channel].InUse)
 	{
 		// initialize the pins
+		printf("Channel %d DIO0=%d DIO5=%d\n", Channel, Config.LoRaDevices[Channel].DIO0, Config.LoRaDevices[Channel].DIO5);
 		pinMode(Config.LoRaDevices[Channel].DIO0, INPUT);
 		pinMode(Config.LoRaDevices[Channel].DIO5, INPUT);
 
@@ -177,7 +173,7 @@ void sendData(int Channel, unsigned char *buffer, int Length)
 	unsigned char data[257];
 	int i;
 	
-	// printf("Sending %d bytes\n", Length);
+	printf("Channel %d Sending %d bytes\n", Channel, Length);
   
 	setMode(Channel, RF98_MODE_STANDBY);
 	
@@ -551,6 +547,7 @@ int CheckForFreeChannel(struct TGPS *GPS)
 		{
 			if ((Config.LoRaDevices[Channel].LoRaMode != lmSending) || digitalRead(Config.LoRaDevices[Channel].DIO0))
 			{
+				printf ("Channel %d is free\n", Channel);
 				// Either not sending, or was but now it's sent.  Clear the flag if we need to
 				if (Config.LoRaDevices[Channel].LoRaMode == lmSending)
 				{
@@ -656,12 +653,12 @@ void *LoRaLoop(void *some_void_ptr)
 				if (Config.LoRaDevices[Channel].Binary)
 				{
 					PacketLength = BuildLoRaPositionPacket(Sentence, Channel, GPS);
-					printf("LoRa: Binary packet %d bytes\n", PacketLength);
+					printf("LoRa%d: Binary packet %d bytes\n", Channel, PacketLength);
 				}
 				else
 				{
 					PacketLength = BuildLoRaSentence(Sentence, Channel, GPS);
-					printf("LoRa: %s", Sentence);
+					printf("LoRa%d: %s", Channel, Sentence);
 				}
 								
 				sendData(Channel, Sentence, PacketLength);		

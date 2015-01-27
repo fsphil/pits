@@ -225,23 +225,42 @@ void LoadConfigFile(struct TConfig *Config)
 	char Keyword[64];
 	char *filename = "/boot/pisky.txt";
 
+	Config->GPSDevice[0] = '\0';
+	
 	if ((fp = fopen(filename, "r")) == NULL)
 	{
 		printf("\nFailed to open config file %s (error %d - %s).\nPlease check that it exists and has read permission.\n", filename, errno, strerror(errno));
 		exit(1);
 	}
 
-	ReadString(fp, "payload", Config->Channels[RTTY_CHANNEL].PayloadID, sizeof(Config->Channels[RTTY_CHANNEL].PayloadID), 1);
-	printf ("RTTY Payload ID = '%s'\n", Config->Channels[RTTY_CHANNEL].PayloadID);
-
-	ReadString(fp, "frequency", Config->Frequency, sizeof(Config->Frequency), 0);
-
 	ReadBoolean(fp, "disable_monitor", 0, &(Config->DisableMonitor));
 	if (Config->DisableMonitor)
 	{
 		printf("HDMI/Composite outputs will be disabled\n");
 	}
-	
+
+	ReadBoolean(fp, "Disable_RTTY", 0, &(Config->DisableRTTY));
+	if (Config->DisableRTTY)
+	{
+		printf("RTTY Disabled\n");
+	}
+	else
+	{
+		ReadString(fp, "payload", Config->Channels[RTTY_CHANNEL].PayloadID, sizeof(Config->Channels[RTTY_CHANNEL].PayloadID), 1);
+		printf ("RTTY Payload ID = '%s'\n", Config->Channels[RTTY_CHANNEL].PayloadID);
+		
+		ReadString(fp, "frequency", Config->Frequency, sizeof(Config->Frequency), 0);
+		
+		BaudRate = ReadInteger(fp, "baud", 1, 300);
+		Config->TxSpeed = BaudToSpeed(BaudRate);
+		if (Config->TxSpeed == B0)
+		{
+			printf ("Unknown baud rate %d\nPlease edit in configuration file\n", BaudRate);
+			exit(1);
+		}
+		printf ("Radio baud rate = %d\n", BaudRate);
+	}
+
 	Config->EnableGPSLogging = ReadBooleanFromString(fp, "logging", "GPS");
 	if (Config->EnableGPSLogging) printf("GPS Logging enabled\n");
 
@@ -254,14 +273,6 @@ void LoadConfigFile(struct TConfig *Config)
 		printf("BMP085 Enabled\n");
 	}
 
-	BaudRate = ReadInteger(fp, "baud", 1, 300);
-	Config->TxSpeed = BaudToSpeed(BaudRate);
-	if (Config->TxSpeed == B0)
-	{
-		printf ("Unknown baud rate %d\nPlease edit in configuration file\n", BaudRate);
-		exit(1);
-	}
-	printf ("Radio baud rate = %d\n", BaudRate);
 
 	ReadBoolean(fp, "camera", 0, &(Config->Camera));
 	printf ("Camera %s\n", Config->Camera ? "Enabled" : "Disabled");
@@ -281,6 +292,8 @@ void LoadConfigFile(struct TConfig *Config)
 		Config->image_packets = ReadInteger(fp, "image_packets", 0, 0);
 		printf ("1 Telemetry packet every %d image packets\n", Config->image_packets);
 	}
+	
+	ReadString(fp, "GPS_Serial", Config->GPSDevice, sizeof(Config->GPSDevice), 0);
 	
 	// I2C overrides.  Only needed for users own boards, or for some of our prototypes
 	if (ReadInteger(fp, "SDA", 0, 0))
@@ -307,30 +320,29 @@ void LoadConfigFile(struct TConfig *Config)
 	// LORA
 	if (NewBoard())
 	{
-		// For dual card
-		Config->LoRaDevices[0].DIO0 = 31;
-		Config->LoRaDevices[0].DIO5 = 26;
+		// For dual card.  These are for the second prototype (earlier one will need overrides)
 
 		Config->LoRaDevices[1].DIO0 = 6;
 		Config->LoRaDevices[1].DIO5 = 5;
+		
+		Config->LoRaDevices[0].DIO0 = 31;
+		Config->LoRaDevices[0].DIO5 = 26;
 	}
 	else
 	{
 		Config->LoRaDevices[0].DIO0 = 6;
 		Config->LoRaDevices[0].DIO5 = 5;
 		
-		Config->LoRaDevices[0].InUse = 1;
-		Config->LoRaDevices[1].InUse = 0;
+		Config->LoRaDevices[1].DIO0 = 3;
+		Config->LoRaDevices[1].DIO5 = 4;
 	}
-	/*
-	Config->LoRaDevices[0].DIO0 =  6;
-	Config->LoRaDevices[0].DIO5 =  5;
-	Config->LoRaDevices[0].InUse = 0;
 
-	Config->LoRaDevices[1].DIO0 =  3;
-	Config->LoRaDevices[1].DIO5 =  2;
+	Config->LoRaDevices[0].InUse = 0;
 	Config->LoRaDevices[1].InUse = 0;
-	*/
+	
+	Config->LoRaDevices[0].LoRaMode = lmIdle;
+	Config->LoRaDevices[1].LoRaMode = lmIdle;
+
 
 	for (Channel=0; Channel<=1; Channel++)
 	{
@@ -354,6 +366,15 @@ void LoadConfigFile(struct TConfig *Config)
 			sprintf(Keyword, "LORA_Mode_%d", Channel);
 			Config->LoRaDevices[Channel].SpeedMode = ReadInteger(fp, Keyword, 0, 0);
 			printf("LoRa Channel %d %s mode\n", Channel, LoRaModes[Config->LoRaDevices[Channel].SpeedMode]);
+
+			// DIO0 / DIO5 overrides
+			sprintf(Keyword, "LORA_DIO0_%d", Channel);
+			Config->LoRaDevices[Channel].DIO0 = ReadInteger(fp, Keyword, 0, Config->LoRaDevices[Channel].DIO0);
+
+			sprintf(Keyword, "LORA_DIO5_%d", Channel);
+			Config->LoRaDevices[Channel].DIO5 = ReadInteger(fp, Keyword, 0, Config->LoRaDevices[Channel].DIO5);
+
+			printf("LoRa Channel %d DIO0=%d DIO5=%d\n", Channel, Config->LoRaDevices[Channel].DIO0, Config->LoRaDevices[Channel].DIO5);
 			
 			sprintf(Keyword, "LORA_Cycle_%d", Channel);
 			Config->LoRaDevices[Channel].CycleTime = ReadInteger(fp, Keyword, 0, 0);			
@@ -762,7 +783,7 @@ int main(void)
 		Config.SDA = 5;
 		Config.SCL = 6;
 	}
-	
+
 	LoadConfigFile(&Config);
 
 	if (Config.DisableMonitor)
@@ -789,15 +810,6 @@ int main(void)
 		exit (1);
 	}
 
-	if (*Config.Frequency)
-	{
-		SetFrequency(Config.Frequency);
-	}
-
-	// Switch on the radio
-	pinMode (NTX2B_ENABLE, OUTPUT);
-	digitalWrite (NTX2B_ENABLE, 1);
-	
 	// Switch on the GPS
 	if (!NewBoard())
 	{
@@ -805,18 +817,30 @@ int main(void)
 		digitalWrite (UBLOX_ENABLE, 0);
 	}
 	
-	if ((fd = OpenSerialPort()) < 0)
+	// Switch on the radio
+	pinMode (NTX2B_ENABLE, OUTPUT);
+	digitalWrite (NTX2B_ENABLE, !Config.DisableRTTY);
+	
+	if (!Config.DisableRTTY)
 	{
-		printf("Cannot open serial port - check documentation!\n");
-		exit(1);
+		if (*Config.Frequency)
+		{
+			SetFrequency(Config.Frequency);
+		}
+	
+		if ((fd = OpenSerialPort()) < 0)
+		{
+			printf("Cannot open serial port - check documentation!\n");
+			exit(1);
+		}
+		close(fd);
 	}
-	close(fd);
 
 	// Set up DS18B20
 	system("sudo modprobe w1-gpio");
 	system("sudo modprobe w1-therm");
 	
-	// SPI for ADC
+	// SPI for ADC, LoRa
 	system("gpio load spi");
 
 	if (stat(SSDVFolder, &st) == -1)
@@ -854,10 +878,14 @@ int main(void)
 		return 1;
 	}
 
-	if (pthread_create(&ADCThread, NULL, ADCLoop, &GPS))
+	if (!Config.LoRaDevices[0].InUse)
 	{
-		fprintf(stderr, "Error creating ADC thread\n");
-		return 1;
+		// DO NOT TRY to use SPI ADC (on channel 0) if we are using LoRa channel 0
+		if (pthread_create(&ADCThread, NULL, ADCLoop, &GPS))
+		{
+			fprintf(stderr, "Error creating ADC thread\n");
+			return 1;
+		}
 	}
 
 	if (Config.Camera)
@@ -886,13 +914,20 @@ int main(void)
 		
 	while (1)
 	{	
-		BuildSentence(Sentence, ++Sentence_Counter, &GPS);
-		
-		SendSentence(Sentence);
-		
-		for (i=0; i< ((GPS.Altitude > Config.high) ? Config.image_packets : 1); i++)
+		if (Config.DisableRTTY)
 		{
-			SendImage();
+			delayMilliseconds (200);
+		}
+		else
+		{
+			BuildSentence(Sentence, ++Sentence_Counter, &GPS);
+		
+			SendSentence(Sentence);
+		
+			for (i=0; i< ((GPS.Altitude > Config.high) ? Config.image_packets : 1); i++)
+			{
+				SendImage();
+			}
 		}
 	}
 }
