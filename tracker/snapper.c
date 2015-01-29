@@ -17,41 +17,68 @@
 
 void *CameraLoop(void *some_void_ptr)
 {
-	int width, height, new_mode;
+	int width, height;
 	struct TGPS *GPS;
-	char *filename = "/home/pi/pits/tracker/take_pic";
-	int old_mode=0;
+	char filename[100];
+	int Channel;
 	FILE *fp;
 
 	GPS = (struct TGPS *)some_void_ptr;
 	
 	while (1)
 	{
-		if (GPS->Altitude >= Config.high)
+		for (Channel=0; Channel<5; Channel++)
 		{
-			width = Config.high_width;
-			height = Config.high_height;
-			new_mode = 2;
-		}
-		else
-		{
-			width = Config.low_width;
-			height = Config.low_height;
-			new_mode = 1;
-		}
-		
-		if (new_mode |= old_mode)
-		{
-			if ((fp = fopen(filename, "wt")) != NULL)
+			if (Config.Channels[Channel].ImagePackets > 0)
 			{
-				fprintf(fp, "raspistill -w %d -h %d -t 3000 -ex auto -mm matrix -o /home/pi/pits/tracker/download/$1.jpg\n", width, height);
-				fclose(fp);
-				chmod(filename, S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IWGRP | S_IXGRP | S_IROTH | S_IWOTH | S_IXOTH); 
-				new_mode = old_mode;
+				// Channel using SSDV
+				
+				if (++Config.Channels[Channel].TimeSinceLastImage >= Config.Channels[Channel].ImagePeriod)
+				{
+					// Time to take a photo on this channel
+
+					Config.Channels[Channel].TimeSinceLastImage = 0;
+					
+					if (GPS->Altitude >= Config.SSDVHigh)
+					{
+						width = Config.Channels[Channel].ImageWidthWhenHigh;
+						height = Config.Channels[Channel].ImageHeightWhenHigh;
+					}
+					else
+					{
+						width = Config.Channels[Channel].ImageWidthWhenLow;
+						height = Config.Channels[Channel].ImageHeightWhenLow;
+					}
+
+					// Create name of file
+					sprintf(filename, "/home/pi/pits/tracker/take_pic_%d", Channel);
+					
+					// Leave it alone if it exists (this means that the photo has not been taken yet)
+					if (access(filename, F_OK ) == -1)
+					{				
+						// Doesn't exist, so create it.  Script will run it next time it checks
+						if ((fp = fopen(filename, "wt")) != NULL)
+						{
+							if (Channel == 4)
+							{
+								// Full size images are saved in dated folder names
+								fprintf(fp, "mkdir -p %s/$2\n", Config.Channels[Channel].SSDVFolder);
+								fprintf(fp, "raspistill -w %d -h %d -t 3000 -ex auto -mm matrix -o %s/$2/$1.jpg\n", width, height, Config.Channels[Channel].SSDVFolder);
+							}
+							else
+							{
+								fprintf(fp, "raspistill -w %d -h %d -t 3000 -ex auto -mm matrix -o %s/$1.jpg\n", width, height, Config.Channels[Channel].SSDVFolder);
+							}
+							
+							fclose(fp);
+							chmod(filename, S_IRUSR | S_IWUSR | S_IXUSR | S_IRGRP | S_IWGRP | S_IXGRP | S_IROTH | S_IWOTH | S_IXOTH); 
+						}
+					}
+				}
 			}
 		}
 		
-		sleep(5);
+		sleep(1);
 	}
 }
 

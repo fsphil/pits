@@ -64,17 +64,20 @@ int NewBoard(void)
 	return boardRev;
 }
 
-int FindAndConvertImage(int RadioChannel, char *SSDVFolder)
+int FindAndConvertImage(int RadioChannel)
 {
+	static char *SubFolder[4] = {"RTTY", "APRS", "LORA0", "LORA1"};
 	size_t LargestFileSize;
 	char LargestFileName[100], FileName[100], CommandLine[200];
 	DIR *dp;
 	struct dirent *ep;
 	struct stat st;
 	int Done;
+	char *SSDVFolder;
 	
 	LargestFileSize = 0;
 	Done = 0;
+	SSDVFolder = Config.Channels[RadioChannel].SSDVFolder;
 	
 	dp = opendir(SSDVFolder);
 	if (dp != NULL)

@@ -50,9 +50,16 @@ struct TChannel
 {
 	unsigned int SentenceCounter;
 	char PayloadID[16];
-	int SendTelemetry;
-	int SendImages;
-	char SSDVFolder[100];
+	int SendTelemetry;						// TRUE to send telemetry on this channel
+	char SSDVFolder[200];
+	int ImagePackets;						// Image packets per telemetry packet
+	int ImagePacketCount;					// Image packets since last telemetry packet
+	int ImageWidthWhenLow;
+	int ImageHeightWhenLow;
+	int ImageWidthWhenHigh;
+	int ImageHeightWhenHigh;
+	int ImagePeriod;						// Time in seconds between photographs
+	int	TimeSinceLastImage;
 };
 
 #define RTTY_CHANNEL 0
@@ -63,12 +70,7 @@ struct TConfig
 {
 	int DisableMonitor;
 	int Camera;
-	int low_width;
-	int low_height;
-	int high;
-	int high_width;
-	int high_height;
-	int image_packets;
+	int SSDVHigh;
 	int EnableBMP085;
 	int EnableGPSLogging;
 	int EnableTelemetryLogging;
@@ -91,11 +93,12 @@ struct TConfig
 		
 	struct TLoRaDevice LoRaDevices[2];
 	
-	struct TChannel Channels[4];
+	struct TChannel Channels[5];		// 0 is RTTY, 1 is APRS, 2/3 are LoRa, 4 is for full-size images
 };
 
 extern struct TConfig Config;
+extern char *SSDVFolder;
 
 char Hex(char Character);
 void WriteLog(char *FileName, char *Buffer);
-int FindAndConvertImage(int RadioChannel, char *SSDVFolder);
+int FindAndConvertImage(int RadioChannel);

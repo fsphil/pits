@@ -45,7 +45,6 @@ struct TBinaryPacket
 FILE *ImageFP;
 int Records, FileNumber;
 struct termios options;
-char *LoRaSSDVFolder="/home/pi/pits/tracker/download";
 
 void writeRegister(int Channel, uint8_t reg, uint8_t val)
 {
@@ -155,7 +154,7 @@ void setupRFM98(int Channel)
 		writeRegister(Channel, REG_MODEM_CONFIG, Config.LoRaDevices[Channel].ImplicitOrExplicit | Config.LoRaDevices[Channel].ErrorCoding | Config.LoRaDevices[Channel].Bandwidth);
 		writeRegister(Channel, REG_MODEM_CONFIG2, Config.LoRaDevices[Channel].SpreadingFactor | CRC_ON);
 		writeRegister(Channel, REG_MODEM_CONFIG3, 0x04 | Config.LoRaDevices[Channel].LowDataRateOptimize);									// 0x04: AGC sets LNA gain
-		writeRegister(Channel, REG_DETECT_OPT, (Config.LoRaDevices[Channel].SpreadingFactor == SPREADING_6) ? 0x05 : 0x03);					// 0x05 For SF6; 0x03 otherwise
+		writeRegister(Channel, REG_DETECT_OPT, (readRegister(Channel, REG_DETECT_OPT) & 0xF8) | ((Config.LoRaDevices[Channel].SpreadingFactor == SPREADING_6) ? 0x05 : 0x03));	// 0x05 For SF6; 0x03 otherwise
 		writeRegister(Channel, REG_DETECTION_THRESHOLD, (Config.LoRaDevices[Channel].SpreadingFactor == SPREADING_6) ? 0x0C : 0x0A);		// 0x0C for SF6, 0x0A otherwise
 		
 		writeRegister(Channel, REG_PAYLOAD_LENGTH, Config.LoRaDevices[Channel].PayloadLength);
@@ -189,9 +188,10 @@ void sendData(int Channel, unsigned char *buffer, int Length)
 	}
 	wiringPiSPIDataRW(Channel, data, Length+1);
 
-	// printf("Set Tx Mode\n");
-  
-	writeRegister(Channel, REG_PAYLOAD_LENGTH, Length);
+// printf("Set Tx Mode\n");
+
+	// Set the length. For implicit mode, since the length needs to match what the receiver expects, we have to set a value which is 255 for an SSDV packet
+	writeRegister(Channel, REG_PAYLOAD_LENGTH, Config.LoRaDevices[Channel].PayloadLength ? Config.LoRaDevices[Channel].PayloadLength : Length);
 
 	// go into transmit mode
 	setMode(Channel, RF98_MODE_TX);
@@ -298,7 +298,7 @@ int SendLoRaImage(int Channel)
 
     if (ImageFP == NULL)
     {
-		if (FindAndConvertImage(LORA_CHANNEL + Channel, LoRaSSDVFolder))
+		if (FindAndConvertImage(LORA_CHANNEL + Channel))
 		{
 			ImageFP = fopen("/home/pi/pits/tracker/snap.bin", "r");
 		}
@@ -598,15 +598,13 @@ void *LoRaLoop(void *some_void_ptr)
 
 	GPS = (struct TGPS *)some_void_ptr;
 
-	if (stat(LoRaSSDVFolder, &st) == -1)
-	{
-		mkdir(LoRaSSDVFolder, 0700);
-	}	
-
 	for (Channel=0; Channel<2; Channel++)
 	{
 		setupRFM98(Channel);
-		startReceiving(Channel);
+		if (Config.LoRaDevices[Channel].SpeedMode == 2)
+		{
+			startReceiving(Channel);
+		}
 	}
 
 	ImagePacketCount = 0;
@@ -615,7 +613,7 @@ void *LoRaLoop(void *some_void_ptr)
 	{	
 		int MaxImagePackets, Channel;
 		
-		MaxImagePackets = (GPS->Altitude > Config.high) ? Config.image_packets : 1;
+		MaxImagePackets = (GPS->Altitude > Config.SSDVHigh) ? Config.Channels[LORA_CHANNEL+Channel].ImagePackets : 1;
 		
 		delay(5);								// To stop this loop gobbling up CPU
 
@@ -625,8 +623,6 @@ void *LoRaLoop(void *some_void_ptr)
 		
 		if (Channel >= 0)
 		{
-			// delay(20);
-
 			if (Config.LoRaDevices[Channel].SendRepeatedPacket == 2)
 			{
 				printf("Repeating uplink packet of %d bytes\n", Config.LoRaDevices[Channel].UplinkRepeatLength);
@@ -643,13 +639,13 @@ void *LoRaLoop(void *some_void_ptr)
 				
 				Config.LoRaDevices[Channel].PacketRepeatLength = 0;
 			}
-			else			
-			// if (ImagePacketCount >= MaxImagePackets)
+			else if (Config.Channels[LORA_CHANNEL+Channel].ImagePacketCount >= Config.Channels[LORA_CHANNEL+Channel].ImagePackets)
 			{
 				int PacketLength;
-				
-				ImagePacketCount = 0;
 
+				// Telemetry packet
+				Config.Channels[LORA_CHANNEL+Channel].ImagePacketCount = 0;
+				
 				if (Config.LoRaDevices[Channel].Binary)
 				{
 					PacketLength = BuildLoRaPositionPacket(Sentence, Channel, GPS);
@@ -663,15 +659,14 @@ void *LoRaLoop(void *some_void_ptr)
 								
 				sendData(Channel, Sentence, PacketLength);		
 			}
-			/*
 			else
 			{
-				if (SendLoRaImage(Channel))
-				{
-				}
-				ImagePacketCount++;
+				// Image packet
+				
+				SendLoRaImage(Channel);
+				
+				Config.Channels[LORA_CHANNEL+Channel].ImagePacketCount++;
 			}
-			*/
 		}
 	}
 }
