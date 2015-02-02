@@ -4,6 +4,7 @@ desktop.ini
 tracker/tracker
 tracker/download
 tracker/keep
+tracker/images
 *.jpg
 telemetry.txt
 gps.txt

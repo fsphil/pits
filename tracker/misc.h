@@ -48,6 +48,7 @@ struct TLoRaDevice
 // 2/3 are for LoRa
 struct TChannel
 {
+	int Enabled;
 	unsigned int SentenceCounter;
 	char PayloadID[16];
 	int SendTelemetry;						// TRUE to send telemetry on this channel
@@ -60,6 +61,14 @@ struct TChannel
 	int ImageHeightWhenHigh;
 	int ImagePeriod;						// Time in seconds between photographs
 	int	TimeSinceLastImage;
+	unsigned int BaudRate;
+	char SSDVFileName[200];
+	FILE *ImageFP;
+	int SSDVRecordNumber;
+	int SSDVTotalRecords;
+	int NextSSDVFileReady;
+	int SSDVFileNumber;
+	int ImagesRequested;
 };
 
 #define RTTY_CHANNEL 0
@@ -101,4 +110,3 @@ extern char *SSDVFolder;
 
 char Hex(char Character);
 void WriteLog(char *FileName, char *Buffer);
-int FindAndConvertImage(int RadioChannel);

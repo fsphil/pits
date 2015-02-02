@@ -64,70 +64,29 @@ int NewBoard(void)
 	return boardRev;
 }
 
-int FindAndConvertImage(int RadioChannel)
+void StartNewFileIfNeeded(int Channel)
 {
-	static char *SubFolder[4] = {"RTTY", "APRS", "LORA0", "LORA1"};
-	size_t LargestFileSize;
-	char LargestFileName[100], FileName[100], CommandLine[200];
-	DIR *dp;
-	struct dirent *ep;
-	struct stat st;
-	int Done;
-	char *SSDVFolder;
-	
-	LargestFileSize = 0;
-	Done = 0;
-	SSDVFolder = Config.Channels[RadioChannel].SSDVFolder;
-	
-	dp = opendir(SSDVFolder);
-	if (dp != NULL)
-	{
-		while (ep = readdir (dp))
+    if (Config.Channels[Channel].ImageFP == NULL)
+    {
+		// Not currently sending a file
+		if (Config.Channels[Channel].NextSSDVFileReady)
 		{
-			if (strstr(ep->d_name, ".jpg") != NULL)
+			// Script has been created, but possibly not run yet
+			// So just try to open the file
+			
+			if ((Config.Channels[Channel].ImageFP = fopen(Config.Channels[Channel].SSDVFileName, "r")) != NULL)
 			{
-				sprintf(FileName, "%s/%s", SSDVFolder, ep->d_name);
-				stat(FileName, &st);
-				if (st.st_size > LargestFileSize)
-				{
-					LargestFileSize = st.st_size;
-					strcpy(LargestFileName, FileName);
-				}
+				// That workd so let's get the file size so we can monitor progress
+				fseek(Config.Channels[Channel].ImageFP, 0L, SEEK_END);
+				Config.Channels[Channel].SSDVTotalRecords = ftell(Config.Channels[Channel].ImageFP) / 256;		// SSDV records are 256 bytes
+				fseek(Config.Channels[Channel].ImageFP, 0L, SEEK_SET);				
+				
+				// Set record counter back to zero
+				Config.Channels[Channel].SSDVRecordNumber = 0;
+				
+				// And clear the flag so that the script can be recreated later
+				Config.Channels[Channel].NextSSDVFileReady = 0;
 			}
 		}
-		(void) closedir (dp);
 	}
-
-	if (LargestFileSize > 0)
-	{
-		char Date[20], SavedImageFolder[100];
-		time_t now;
-		struct tm *t;
-		
-		printf("Found file %s to convert\n", LargestFileName);
-		
-		// Now convert the file
-		FileNumber++;
-		FileNumber = FileNumber & 255;
-		sprintf(CommandLine, "ssdv -e -c %s -i %d %s /home/pi/pits/tracker/snap.bin", Config.Channels[RadioChannel].PayloadID, FileNumber, LargestFileName);
-		system(CommandLine);
-		
-		// And move those pesky image files
-		now = time(NULL);
-		t = localtime(&now);
-		strftime(Date, sizeof(Date)-1, "%d_%m_%Y", t);		
-
-		sprintf(SavedImageFolder, "%s/%s", SSDVFolder, Date);
-		if (stat(SavedImageFolder, &st) == -1)
-		{
-			mkdir(SavedImageFolder, 0777);
-		}
-		system(CommandLine);
-		sprintf(CommandLine, "mv %s/*.jpg %s", SSDVFolder, SavedImageFolder);
-		system(CommandLine);
-
-		Done = 1;
-	}
-	
-	return (LargestFileSize > 0);
 }

@@ -42,7 +42,6 @@ struct TBinaryPacket
 };
 
 
-FILE *ImageFP;
 int Records, FileNumber;
 struct termios options;
 
@@ -100,11 +99,11 @@ void setMode(int Channel, uint8_t newMode)
   
 	if(newMode != RF98_MODE_SLEEP)
 	{
-		printf("Waiting for Mode Change\n");
+		// printf("Waiting for Mode Change\n");
 		while(digitalRead(Config.LoRaDevices[Channel].DIO5) == 0)
 		{
 		} 
-		printf("Mode change completed\n");
+		// printf("Mode change completed\n");
 	}
 	
 	return;
@@ -167,12 +166,12 @@ void setupRFM98(int Channel)
 	}
 }
 
-void sendData(int Channel, unsigned char *buffer, int Length)
+void SendLoRaData(int Channel, unsigned char *buffer, int Length)
 {
 	unsigned char data[257];
 	int i;
 	
-	printf("Channel %d Sending %d bytes\n", Channel, Length);
+	printf("LoRa Channel %d Sending %d bytes\n", Channel, Length);
   
 	setMode(Channel, RF98_MODE_STANDBY);
 	
@@ -290,36 +289,31 @@ int BuildLoRaPositionPacket(char *TxLine, int Channel, struct TGPS *GPS)
 	return sizeof(struct TBinaryPacket);
 }
 
-int SendLoRaImage(int Channel)
+int SendLoRaImage(int LoRaChannel)
 {
     unsigned char Buffer[256];
     size_t Count;
     int SentSomething = 0;
 
-    if (ImageFP == NULL)
+    if (Config.Channels[LORA_CHANNEL+LoRaChannel].ImageFP != NULL)
     {
-		if (FindAndConvertImage(LORA_CHANNEL + Channel))
-		{
-			ImageFP = fopen("/home/pi/pits/tracker/snap.bin", "r");
-		}
-        Records = 0;
-    }
-
-    if (ImageFP != NULL)
-    {
-        Count = fread(Buffer, 1, 256, ImageFP);
+        Count = fread(Buffer, 1, 256, Config.Channels[LORA_CHANNEL+LoRaChannel].ImageFP);
         if (Count > 0)
         {
             printf("Record %d, %d bytes\r\n", ++Records, Count);
 
-			sendData(Channel, Buffer+1, 255);
+			Config.Channels[LORA_CHANNEL+LoRaChannel].ImagePacketCount++;
+			
+            printf("LORA SSDV record %d of %d\r\n", ++Config.Channels[LORA_CHANNEL + LoRaChannel].SSDVRecordNumber, Config.Channels[LORA_CHANNEL + LoRaChannel].SSDVTotalRecords);
+			
+			SendLoRaData(LoRaChannel, Buffer+1, 255);
 			
             SentSomething = 1;
         }
         else
         {
-            fclose(ImageFP);
-            ImageFP = NULL;
+            fclose(Config.Channels[LORA_CHANNEL+LoRaChannel].ImageFP);
+            Config.Channels[LORA_CHANNEL+LoRaChannel].ImageFP = NULL;
         }
     }
 
@@ -547,7 +541,7 @@ int CheckForFreeChannel(struct TGPS *GPS)
 		{
 			if ((Config.LoRaDevices[Channel].LoRaMode != lmSending) || digitalRead(Config.LoRaDevices[Channel].DIO0))
 			{
-				printf ("Channel %d is free\n", Channel);
+				printf ("LoRa Channel %d is free\n", Channel);
 				// Either not sending, or was but now it's sent.  Clear the flag if we need to
 				if (Config.LoRaDevices[Channel].LoRaMode == lmSending)
 				{
@@ -590,7 +584,7 @@ int CheckForFreeChannel(struct TGPS *GPS)
 	
 void *LoRaLoop(void *some_void_ptr)
 {
-	int ReturnCode, ImagePacketCount, fd, Channel;
+	int ReturnCode, ImagePacketCount, fd, LoRaChannel;
 	unsigned long Sentence_Counter = 0;
 	char Sentence[100], Command[100];
 	struct stat st = {0};
@@ -598,12 +592,12 @@ void *LoRaLoop(void *some_void_ptr)
 
 	GPS = (struct TGPS *)some_void_ptr;
 
-	for (Channel=0; Channel<2; Channel++)
+	for (LoRaChannel=0; LoRaChannel<2; LoRaChannel++)
 	{
-		setupRFM98(Channel);
-		if (Config.LoRaDevices[Channel].SpeedMode == 2)
+		setupRFM98(LoRaChannel);
+		if (Config.LoRaDevices[LoRaChannel].SpeedMode == 2)
 		{
-			startReceiving(Channel);
+			startReceiving(LoRaChannel);
 		}
 	}
 
@@ -611,61 +605,66 @@ void *LoRaLoop(void *some_void_ptr)
 	
 	while (1)
 	{	
-		int MaxImagePackets, Channel;
-		
-		MaxImagePackets = (GPS->Altitude > Config.SSDVHigh) ? Config.Channels[LORA_CHANNEL+Channel].ImagePackets : 1;
-		
 		delay(5);								// To stop this loop gobbling up CPU
 
 		CheckForPacketOnListeningChannels();
 		
-		Channel = CheckForFreeChannel(GPS);		// 0 or 1 if there's a free channel and we should be sending on that channel now
+		LoRaChannel = CheckForFreeChannel(GPS);		// 0 or 1 if there's a free channel and we should be sending on that channel now
 		
-		if (Channel >= 0)
+		if (LoRaChannel >= 0)
 		{
-			if (Config.LoRaDevices[Channel].SendRepeatedPacket == 2)
+			int MaxImagePackets;
+			
+			if (Config.LoRaDevices[LoRaChannel].SendRepeatedPacket == 2)
 			{
-				printf("Repeating uplink packet of %d bytes\n", Config.LoRaDevices[Channel].UplinkRepeatLength);
+				printf("Repeating uplink packet of %d bytes\n", Config.LoRaDevices[LoRaChannel].UplinkRepeatLength);
 				
-				sendData(Channel, Config.LoRaDevices[Channel].UplinkPacket, Config.LoRaDevices[Channel].UplinkRepeatLength);
+				SendLoRaData(LoRaChannel, Config.LoRaDevices[LoRaChannel].UplinkPacket, Config.LoRaDevices[LoRaChannel].UplinkRepeatLength);
 				
-				Config.LoRaDevices[Channel].UplinkRepeatLength = 0;
+				Config.LoRaDevices[LoRaChannel].UplinkRepeatLength = 0;
 			}
-			else if (Config.LoRaDevices[Channel].SendRepeatedPacket == 1)
+			else if (Config.LoRaDevices[LoRaChannel].SendRepeatedPacket == 1)
 			{
-				printf("Repeating balloon packet of %d bytes\n", Config.LoRaDevices[Channel].PacketRepeatLength);
+				printf("Repeating balloon packet of %d bytes\n", Config.LoRaDevices[LoRaChannel].PacketRepeatLength);
 				
-				sendData(Channel, Config.LoRaDevices[Channel].PacketToRepeat, Config.LoRaDevices[Channel].PacketRepeatLength);
+				SendLoRaData(LoRaChannel, Config.LoRaDevices[LoRaChannel].PacketToRepeat, Config.LoRaDevices[LoRaChannel].PacketRepeatLength);
 				
-				Config.LoRaDevices[Channel].PacketRepeatLength = 0;
-			}
-			else if (Config.Channels[LORA_CHANNEL+Channel].ImagePacketCount >= Config.Channels[LORA_CHANNEL+Channel].ImagePackets)
-			{
-				int PacketLength;
-
-				// Telemetry packet
-				Config.Channels[LORA_CHANNEL+Channel].ImagePacketCount = 0;
-				
-				if (Config.LoRaDevices[Channel].Binary)
-				{
-					PacketLength = BuildLoRaPositionPacket(Sentence, Channel, GPS);
-					printf("LoRa%d: Binary packet %d bytes\n", Channel, PacketLength);
-				}
-				else
-				{
-					PacketLength = BuildLoRaSentence(Sentence, Channel, GPS);
-					printf("LoRa%d: %s", Channel, Sentence);
-				}
-								
-				sendData(Channel, Sentence, PacketLength);		
+				Config.LoRaDevices[LoRaChannel].PacketRepeatLength = 0;
 			}
 			else
 			{
-				// Image packet
+				StartNewFileIfNeeded(LORA_CHANNEL + LoRaChannel);
 				
-				SendLoRaImage(Channel);
+				MaxImagePackets = (GPS->Altitude > Config.SSDVHigh) ? Config.Channels[LORA_CHANNEL+LoRaChannel].ImagePackets : 1;
 				
-				Config.Channels[LORA_CHANNEL+Channel].ImagePacketCount++;
+				if ((Config.Channels[LORA_CHANNEL+LoRaChannel].ImageFP == NULL) || (Config.Channels[LORA_CHANNEL+LoRaChannel].ImagePacketCount >= MaxImagePackets))
+				{
+					int PacketLength;
+
+					// Telemetry packet
+					
+					if (Config.LoRaDevices[LoRaChannel].Binary)
+					{
+						PacketLength = BuildLoRaPositionPacket(Sentence, LoRaChannel, GPS);
+						printf("LoRa%d: Binary packet %d bytes\n", LoRaChannel, PacketLength);
+					}
+					else
+					{
+						PacketLength = BuildLoRaSentence(Sentence, LoRaChannel, GPS);
+						printf("LoRa%d: %s", LoRaChannel, Sentence);
+					}
+									
+					SendLoRaData(LoRaChannel, Sentence, PacketLength);		
+
+					Config.Channels[LORA_CHANNEL+LoRaChannel].ImagePacketCount = 0;
+				}
+				else
+				{
+					// Image packet
+					
+					printf("LoRa%d: Send image packet\n", LoRaChannel);
+					SendLoRaImage(LoRaChannel);
+				}
 			}
 		}
 	}

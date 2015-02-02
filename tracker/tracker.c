@@ -33,7 +33,6 @@
 #include <termios.h> 	// POSIX terminal control definitions
 #include <stdint.h>
 #include <stdlib.h>
-#include <dirent.h>
 #include <math.h>
 #include <pthread.h>
 #include <wiringPi.h>
@@ -53,8 +52,6 @@ struct TConfig Config;
 #define NTX2B_ENABLE	0
 #define UBLOX_ENABLE	2
 
-FILE *ImageFP;
-int Records;
 struct termios options;
 char *SSDVFolder="/home/pi/pits/tracker/images";
  
@@ -248,6 +245,7 @@ void LoadConfigFile(struct TConfig *Config)
 	}
 
 	ReadBoolean(fp, "Disable_RTTY", -1, 0, &(Config->DisableRTTY));
+	Config->Channels[RTTY_CHANNEL].Enabled = !Config->DisableRTTY;
 	if (Config->DisableRTTY)
 	{
 		printf("RTTY Disabled\n");
@@ -260,6 +258,9 @@ void LoadConfigFile(struct TConfig *Config)
 		ReadString(fp, "frequency", -1, Config->Frequency, sizeof(Config->Frequency), 0);
 		
 		BaudRate = ReadInteger(fp, "baud", -1, 1, 300);
+		
+		Config->Channels[RTTY_CHANNEL].BaudRate = BaudRate;
+		
 		Config->TxSpeed = BaudToSpeed(BaudRate);
 		if (Config->TxSpeed == B0)
 		{
@@ -368,6 +369,7 @@ void LoadConfigFile(struct TConfig *Config)
 		{
 			printf("LORA%d frequency set to %s\n", Channel, Config->LoRaDevices[Channel].Frequency);
 			Config->LoRaDevices[Channel].InUse = 1;
+			Config->Channels[LORA_CHANNEL+Channel].Enabled = 1;
 
 			ReadString(fp, "LORA_Payload", Channel, Config->Channels[LORA_CHANNEL+Channel].PayloadID, sizeof(Config->Channels[LORA_CHANNEL+Channel].PayloadID), 1);
 			printf ("LORA%d Payload ID = '%s'\n", Channel, Config->Channels[LORA_CHANNEL+Channel].PayloadID);
@@ -423,6 +425,7 @@ void LoadConfigFile(struct TConfig *Config)
 				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_250K;
 				Config->LoRaDevices[Channel].SpreadingFactor = SPREADING_6;
 				Config->LoRaDevices[Channel].LowDataRateOptimize = 0;		
+				Config->Channels[LORA_CHANNEL+Channel].BaudRate = 16828;
 			}
 			else if (Config->LoRaDevices[Channel].SpeedMode == 3)
 			{
@@ -432,6 +435,7 @@ void LoadConfigFile(struct TConfig *Config)
 				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_250K;
 				Config->LoRaDevices[Channel].SpreadingFactor = SPREADING_7;
 				Config->LoRaDevices[Channel].LowDataRateOptimize = 0;		
+				Config->Channels[LORA_CHANNEL+Channel].BaudRate = 8000;		// check!!
 			}
 			else if (Config->LoRaDevices[Channel].SpeedMode == 2)
 			{
@@ -442,6 +446,7 @@ void LoadConfigFile(struct TConfig *Config)
 				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_62K5;
 				Config->LoRaDevices[Channel].SpreadingFactor = SPREADING_8;
 				Config->LoRaDevices[Channel].LowDataRateOptimize = 0;		
+				Config->Channels[LORA_CHANNEL+Channel].BaudRate = 2000;		// Not used (only for SSDV modes)
 			}
 			else if (Config->LoRaDevices[Channel].SpeedMode == 1)
 			{
@@ -451,6 +456,7 @@ void LoadConfigFile(struct TConfig *Config)
 				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_20K8;
 				Config->LoRaDevices[Channel].SpreadingFactor = SPREADING_6;
 				Config->LoRaDevices[Channel].LowDataRateOptimize = 0;
+				Config->Channels[LORA_CHANNEL+Channel].BaudRate = 1400;		// Used to calculate time till end of image
 			}
 			else
 			{
@@ -460,6 +466,7 @@ void LoadConfigFile(struct TConfig *Config)
 				Config->LoRaDevices[Channel].Bandwidth = BANDWIDTH_20K8;
 				Config->LoRaDevices[Channel].SpreadingFactor = SPREADING_11;
 				Config->LoRaDevices[Channel].LowDataRateOptimize = 0x08;		
+				Config->Channels[LORA_CHANNEL+Channel].BaudRate = 60;		// Not used (only for SSDV modes)
 			}
 			
 			Temp = ReadInteger(fp, "LORA_SF", Channel, 0, 0);
@@ -719,28 +726,23 @@ void SendSentence(char *TxLine)
 	
 }
 
-int SendImage()
+int SendRTTYImage()
 {
     unsigned char Buffer[256];
     size_t Count;
     int SentSomething = 0;
 	int fd;
 
-    if (ImageFP == NULL)
+	StartNewFileIfNeeded(RTTY_CHANNEL);
+	
+    if (Config.Channels[RTTY_CHANNEL].ImageFP != NULL)
     {
-		if (FindAndConvertImage(RTTY_CHANNEL))
-		{
-			ImageFP = fopen("/home/pi/pits/tracker/snap.bin", "r");
-		}
-        Records = 0;
-    }
-
-    if (ImageFP != NULL)
-    {
-        Count = fread(Buffer, 1, 256, ImageFP);
+        Count = fread(Buffer, 1, 256, Config.Channels[RTTY_CHANNEL].ImageFP);
         if (Count > 0)
         {
-            printf("Record %d, %d bytes\r\n", ++Records, Count);
+            printf("RTTY SSDV record %d of %d\r\n", ++Config.Channels[RTTY_CHANNEL].SSDVRecordNumber, Config.Channels[RTTY_CHANNEL].SSDVTotalRecords);
+
+			Config.Channels[RTTY_CHANNEL].ImagePacketCount++;
 
 			if ((fd = OpenSerialPort()) >= 0)
 			{
@@ -752,8 +754,8 @@ int SendImage()
         }
         else
         {
-            fclose(ImageFP);
-            ImageFP = NULL;
+            fclose(Config.Channels[RTTY_CHANNEL].ImageFP);
+            Config.Channels[RTTY_CHANNEL].ImageFP = NULL;
         }
     }
 
@@ -827,10 +829,6 @@ int main(void)
 		digitalWrite (UBLOX_ENABLE, 0);
 	}
 	
-	// Switch on the radio
-	pinMode (NTX2B_ENABLE, OUTPUT);
-	digitalWrite (NTX2B_ENABLE, !Config.DisableRTTY);
-	
 	if (!Config.DisableRTTY)
 	{
 		if (*Config.Frequency)
@@ -846,6 +844,10 @@ int main(void)
 		close(fd);
 	}
 
+	// Switch on the radio
+	pinMode (NTX2B_ENABLE, OUTPUT);
+	digitalWrite (NTX2B_ENABLE, !Config.DisableRTTY);
+	
 	// Set up DS18B20
 	system("sudo modprobe w1-gpio");
 	system("sudo modprobe w1-therm");
@@ -964,7 +966,7 @@ int main(void)
 			{
 				for (i=0; i< ((GPS.Altitude > Config.SSDVHigh) ? Config.Channels[0].ImagePackets : 1); i++)
 				{
-					SendImage();
+					SendRTTYImage();
 				}
 			}
 		}
